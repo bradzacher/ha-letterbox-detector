@@ -1,0 +1,46 @@
+name: Letterbox Detector
+version: "1.4.1"
+slug: letterbox_detector
+description: >
+  Idles until a Front Gate person, face, lock, package, or motion
+  signal, then watches the package camera and sets
+  binary_sensor.letterbox_opened when the letterbox lid is held open.
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: services
+boot: auto
+host_network: true
+homeassistant_api: true
+hassio_api: false
+auth_api: false
+map:
+  - share:rw
+options:
+  camera_entity: camera.front_gate_package_camera
+  protect_host: ""
+  hold_frames: 3
+  min_area: 50000
+  sharp_min: 5.0
+  watch_seconds: 90
+  trigger_entities:
+    - binary_sensor.front_gate_motion
+    - binary_sensor.front_gate_person_detected
+    - event.front_gate_smart_detection
+    - event.front_gate_lock_access
+    - event.front_gate_package
+    - binary_sensor.front_gate_is_dark
+  log_level: info
+  rtsp_url: ""
+schema:
+  camera_entity: str
+  protect_host: str
+  hold_frames: int
+  min_area: int
+  sharp_min: float
+  watch_seconds: int
+  trigger_entities:
+    - str
+  log_level: list(debug|info|warning|error)
+  rtsp_url: password
