@@ -15,7 +15,12 @@ normalization. A lid-open decision requires:
      crushed-exposure frame can blow up the peak/median ratio.
 
 The published state goes on only after hold_frames consecutive
-positives (3 frames at 3 fps is about 1 second).
+positives (3 frames at 3 fps is about 1 second). A true open_frame
+starts that streak; afterwards a near-open frame (residual clearly
+above a closed lid, sharpness at least TALL_SHARP_MIN, still inside
+the localization and left-area headlights/global-wash guards) also
+counts, so a brief lid plus a parcel over it can still reach the hold
+(27 Nov 2026 13:11 ACDT miss).
 """
 
 from __future__ import annotations
@@ -62,11 +67,16 @@ LEARN_MAX_ABS = 25_000
 # Edge-on lid: a tall, narrow darker residual that reaches the bottom
 # of the frame (the lid rises from the box at the bottom edge). Covers
 # a parcel held across the lid, where the Sobel bar score stays soft.
-TALL_MIN_AREA = 35_000
+TALL_MIN_AREA = 30_000
 TALL_MIN_H = 0.45
 TALL_MIN_BOTTOM = 0.80
 TALL_MAX_W = 0.30
 TALL_SHARP_MIN = 2.0
+# After a true open_frame, these near-open frames also count toward
+# the hold. Closed lids sit near 2k; the 27 Nov miss was 33-36k with
+# sharpness 2.5-4.1 after one crisp open frame.
+NEAR_MIN_AREA = 30_000
+NEAR_SHARP_MIN = TALL_SHARP_MIN
 SOBEL_X0, SOBEL_X1 = 0.48, 0.98
 SOBEL_Y0, SOBEL_Y1 = 0.15, 0.85
 SOBEL_SMOOTH = 11
@@ -85,6 +95,7 @@ class FrameScore:
     abs_area: int = 0
     tall: bool = False
     reasons: list[str] = field(default_factory=list)
+    tall_reasons: list[str] = field(default_factory=list)
 
     @property
     def global_illum(self) -> bool:
@@ -166,8 +177,17 @@ class LetterboxDetector:
         self.ref_bgr: Optional[np.ndarray] = None
         self.ref_n: Optional[np.ndarray] = None
         self._positives = 0
+        self._seen_open = False
+        self._near_open_streak = 0
         self.state = False
         self.last_score: Optional[FrameScore] = None
+
+    def reset_hold(self) -> None:
+        """Clear the hold streak at the start of a watch window."""
+        self._positives = 0
+        self._seen_open = False
+        self._near_open_streak = 0
+        self.state = False
 
     def set_reference(self, bgr: np.ndarray) -> None:
         if bgr is None or bgr.size == 0:
@@ -225,14 +245,20 @@ class LetterboxDetector:
         abs_th = _residual_mask(np.abs(self.ref_n - n), 0.0, 1.0, ROI_Y0, ROI_Y1)
         abs_area, _, _ = _largest_blob(abs_th)
         tall = False
-        if bbox is not None:
+        tall_reasons: list[str] = []
+        if bbox is None:
+            tall_reasons.append("no_bbox")
+        else:
             bx, by, bw, bh = bbox
-            tall = (
-                area >= TALL_MIN_AREA
-                and bh >= TALL_MIN_H * h
-                and (by + bh) >= TALL_MIN_BOTTOM * h
-                and bw <= TALL_MAX_W * w
-            )
+            if area < TALL_MIN_AREA:
+                tall_reasons.append(f"area {area}<{TALL_MIN_AREA}")
+            if bh < TALL_MIN_H * h:
+                tall_reasons.append(f"height {bh}/{h}<{TALL_MIN_H}")
+            if (by + bh) < TALL_MIN_BOTTOM * h:
+                tall_reasons.append(f"bottom {by + bh}/{h}<{TALL_MIN_BOTTOM}")
+            if bw > TALL_MAX_W * w:
+                tall_reasons.append(f"width {bw}/{w}>{TALL_MAX_W}")
+            tall = not tall_reasons
         left_area, _, _ = _largest_blob(ctrl_th)
         roi_area = max(1, int((ROI_Y1 - ROI_Y0) * h) * int((ROI_X1 - ROI_X0) * w))
         roi_frac = float(area) / float(roi_area)
@@ -260,6 +286,15 @@ class LetterboxDetector:
             and left_area < self.min_area
             and (sharp_hard or sharp_soft)
         )
+        if not (TALL_SHARP_MIN <= sharp <= self.sharp_max):
+            if sharp < TALL_SHARP_MIN:
+                tall_reasons.append(f"sharp {sharp:.2f}<{TALL_SHARP_MIN}")
+            if sharp > self.sharp_max:
+                tall_reasons.append(f"sharp {sharp:.2f}>{self.sharp_max}")
+        if roi_frac > self.max_roi_frac:
+            tall_reasons.append(f"roi_frac {roi_frac:.2f}>{self.max_roi_frac}")
+        if left_area >= self.min_area:
+            tall_reasons.append(f"left_area {left_area}>={self.min_area}")
         tall_open = (
             tall
             and TALL_SHARP_MIN <= sharp <= self.sharp_max
@@ -269,6 +304,7 @@ class LetterboxDetector:
         if tall_open and not open_frame:
             open_frame = True
             reasons = ["tall_lid"]
+            tall_reasons = []
         return FrameScore(
             open_frame=open_frame,
             area=area,
@@ -281,16 +317,37 @@ class LetterboxDetector:
             abs_area=abs_area,
             tall=tall,
             reasons=reasons,
+            tall_reasons=tall_reasons,
         )
 
-    def feed(self, bgr: np.ndarray) -> dict:
-        score = self.score_frame(bgr)
+    def is_near_open(self, score: FrameScore) -> bool:
+        """True when a non-open frame should still extend an open streak."""
+        return (
+            not score.open_frame
+            and score.area >= NEAR_MIN_AREA
+            and NEAR_SHARP_MIN <= score.sharp <= self.sharp_max
+            and score.roi_frac <= self.max_roi_frac
+            and score.left_area < self.min_area
+        )
+
+    def consider_score(self, score: FrameScore, bgr: Optional[np.ndarray] = None) -> dict:
+        """Apply hold / reference-learn logic to an already-computed score.
+
+        Used by feed() and by offline replay of logged frame scores.
+        """
         self.last_score = score
+        near_open = self.is_near_open(score)
         if score.open_frame:
             self._positives += 1
+            self._seen_open = True
+        elif self._seen_open and near_open:
+            self._positives += 1
+            self._near_open_streak += 1
         else:
             self._positives = 0
-            if self.should_learn_reference(score):
+            self._seen_open = False
+            self._near_open_streak = 0
+            if bgr is not None and self.should_learn_reference(score):
                 if score.global_illum:
                     # Lighting changed broadly and the lid is not open.
                     # Replace the reference so a day ref cannot linger
@@ -302,6 +359,9 @@ class LetterboxDetector:
         self.state = held
         return {
             "open_frame": score.open_frame,
+            "near_open": near_open,
+            "near_open_count": self._near_open_streak,
+            "seen_open": self._seen_open,
             "state": held,
             "positives": self._positives,
             "area": score.area,
@@ -312,7 +372,13 @@ class LetterboxDetector:
             "roi_frac": score.roi_frac,
             "left_area": score.left_area,
             "reasons": score.reasons,
+            "tall": score.tall,
+            "tall_reasons": score.tall_reasons,
         }
+
+    def feed(self, bgr: np.ndarray) -> dict:
+        score = self.score_frame(bgr)
+        return self.consider_score(score, bgr=bgr)
 
     def bootstrap_reference(self, bgr: np.ndarray) -> bool:
         """Accept a startup frame as the closed reference if it looks closed."""

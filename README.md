@@ -39,7 +39,8 @@ Defaults match the original Front Gate install.
 - `protect_host` — UniFi Protect host, used when building a stream URL
 - `rtsp_url` — explicit RTSP or RTSPS URL
 - `hold_frames` — consecutive open frames required before the sensor
-  turns on (default 3)
+  turns on (default 3). From 1.4.2, after a true open frame, near-open
+  frames also count toward this hold.
 - `min_area`, `sharp_min` — detection thresholds
 - `watch_seconds` — watch window length (default 90), extended while a
   level trigger stays on
@@ -53,6 +54,15 @@ A test event `letterbox_detector_test` with `action: watch` or
 on.
 
 ## Changelog
+
+### 1.4.2 (27 Nov 2026)
+
+Fixes a delivery miss where the lid was open in one clear frame, then
+covered by a satchel. After a true open frame, near-open frames (area
+≥ 30,000, sharpness ≥ 2.0, still inside the localization and left-area
+guards) count toward the three-frame hold. The tall-lid area floor is
+30,000. Logs include the near-open count and why a tall-lid decision
+failed.
 
 ### 1.4.1 (19 Nov 2026)
 

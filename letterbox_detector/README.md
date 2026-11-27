@@ -51,3 +51,11 @@ reference is only learned when the frame barely differs from it in
 either direction (a parcel held over the lid no longer becomes the
 "closed" scene), and a tall, narrow dark residual reaching the bottom
 of the frame (the lid seen edge-on behind a parcel) counts as open.
+
+v1.4.2 (27 Nov 2026) fixes the 13:11 ACDT delivery miss. After a true
+open frame, near-open frames (area ≥ 30,000, sharpness ≥ 2.0, still
+inside the localization and left-area guards) count toward the
+three-frame hold, so a brief lid plus a satchel over it still
+notifies. The tall-lid area floor is 30,000, and logs now include the
+near-open count and why a tall-lid decision failed.
+

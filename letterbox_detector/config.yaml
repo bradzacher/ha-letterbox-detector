@@ -1,5 +1,5 @@
 name: Letterbox Detector
-version: "1.4.1"
+version: "1.4.2"
 slug: letterbox_detector
 description: >
   Idles until a Front Gate person, face, lock, package, or motion

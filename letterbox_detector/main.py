@@ -899,8 +899,7 @@ def run() -> None:
         watch_started_at = time.time()
         ref_refresh_count = 0
         last_state = "off"
-        det._positives = 0
-        det.state = False
+        det.reset_hold()
         close_stream()
         source = "starting"
         rtsp_result = {}
@@ -1076,15 +1075,21 @@ def run() -> None:
                     (result.get("area") or 0) >= 25000 or (result.get("sharp") or 0) >= 4.0
                 ):
                     log.info(
-                        "frame %s open=%s held=%s area=%s roi_frac=%s left=%s sharp=%.2f reasons=%s",
+                        "frame %s open=%s held=%s near_open=%s near_count=%s positives=%s "
+                        "area=%s roi_frac=%s left=%s sharp=%.2f reasons=%s tall=%s tall_reasons=%s",
                         frames_seen,
                         result.get("open_frame"),
                         result.get("state"),
+                        result.get("near_open"),
+                        result.get("near_open_count"),
+                        result.get("positives"),
                         result.get("area"),
                         round(float(result.get("roi_frac") or 0.0), 3),
                         result.get("left_area"),
                         float(result.get("sharp") or 0.0),
                         result.get("reasons"),
+                        result.get("tall"),
+                        result.get("tall_reasons"),
                     )
                 state = "on" if result["state"] else "off"
                 if watch.suppress_open_publish:
@@ -1111,11 +1116,12 @@ def run() -> None:
                     if ok:
                         if changed:
                             log.info(
-                                "letterbox %s area=%s sharp=%.2f positives=%s",
+                                "letterbox %s area=%s sharp=%.2f positives=%s near_count=%s",
                                 state,
                                 result["area"],
                                 result["sharp"],
                                 result["positives"],
+                                result.get("near_open_count"),
                             )
                         last_state = state
                 if now - last_watch_pub >= 15:
